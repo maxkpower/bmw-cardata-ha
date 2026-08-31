@@ -1,3 +1,24 @@
+> ### About this fork
+>
+> Patched fork of [JjyKsi/bmw-cardata-ha](https://github.com/JjyKsi/bmw-cardata-ha),
+> which has been unmaintained since October 2025. It carries fixes that upstream
+> has not merged:
+>
+> - **MQTT TLS handshake.** Upstream pins the TLS *maximum* version to 1.2; BMW's
+>   broker now requires 1.3, so setup fails with `TLSV1_ALERT_PROTOCOL_VERSION`.
+>   Reported upstream as #133, #137, #141, #143.
+> - **`id_token` no longer published as a sensor attribute.** Upstream puts the
+>   live MQTT credential into the `connection_status` diagnostic sensor, which
+>   means the recorder database and every backup.
+> - **Debug logging off by default**, and no more full MQTT payloads (they carry
+>   live GPS) or API payloads in the log.
+> - **VIN and raw vehicle data no longer duplicated onto every entity.**
+> - paho-mqtt 2.x compatibility shim.
+>
+> Everything below is upstream's documentation.
+
+---
+
 <p align="center">
   <img src="logo.png" alt="BimmerData Streamline logo" width="240" />
 </p>
