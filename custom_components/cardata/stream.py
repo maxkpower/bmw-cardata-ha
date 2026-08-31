@@ -18,6 +18,10 @@ from .debug import debug_enabled
 
 _LOGGER = logging.getLogger(__name__)
 
+# Telemetry messages are a few KB. Anything vastly larger is not something we
+# should be parsing on the event loop.
+_MAX_PAYLOAD_BYTES = 1_048_576
+
 
 def _mask(value: Optional[str]) -> str:
     """Return an identifier truncated enough to be safe in state attributes."""
@@ -72,6 +76,14 @@ class CardataStreamManager:
             await self._async_start_locked()
 
     async def _async_start_locked(self) -> None:
+        if self._client is not None:
+            # Already connected or connecting. Without this guard a credential
+            # refresh racing a reconnect produced two live clients; BMW allows
+            # one stream per GCID, so the broker drops one, whose disconnect
+            # callback restarts the other - a self-sustaining reconnect storm.
+            if debug_enabled():
+                _LOGGER.debug("BMW MQTT client already present; not starting another")
+            return
         self._disconnect_future = None
         if self._last_disconnect is not None:
             elapsed = time.monotonic() - self._last_disconnect
@@ -256,12 +268,24 @@ class CardataStreamManager:
                 _LOGGER.debug("BMW MQTT subscribed mid=%s qos=%s", mid, granted_qos)
 
     def _handle_message(self, client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
-        payload = msg.payload.decode(errors="ignore")
         if not self._message_callback:
             return
+        if len(msg.payload) > _MAX_PAYLOAD_BYTES:
+            _LOGGER.warning(
+                "Dropping oversized BMW MQTT message on %s (%s bytes)",
+                msg.topic,
+                len(msg.payload),
+            )
+            return
+        payload = msg.payload.decode(errors="ignore")
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
+            return
+        if not isinstance(data, dict):
+            # A JSON list or bare string would raise AttributeError deep inside
+            # the coordinator, where the discarded future hides it completely.
+            _LOGGER.debug("Ignoring non-object BMW MQTT payload on %s", msg.topic)
             return
         if debug_enabled():
             # Descriptor names only. The values include live GPS coordinates and
@@ -272,16 +296,39 @@ class CardataStreamManager:
                 len(data) if isinstance(data, dict) else "?",
             )
         if self._message_callback:
-            asyncio.run_coroutine_threadsafe(self._message_callback(data), self.hass.loop)
+            future = asyncio.run_coroutine_threadsafe(
+                self._message_callback(data), self.hass.loop
+            )
+
+            def _surface_error(fut) -> None:
+                # The result used to be discarded, so every exception raised
+                # while handling a message was invisible until GC. Anything that
+                # breaks parsing needs to be loud, not silent.
+                try:
+                    fut.result()
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Error handling BMW CarData message")
+
+            future.add_done_callback(_surface_error)
 
     def _handle_disconnect(self, client: mqtt.Client, userdata, rc) -> None:
+        # paho delivers MQTT_ERR_* here, NOT the CONNACK codes used in
+        # _handle_connect. The old table decoded the wrong protocol field, so the
+        # ordinary token-expiry drop (rc=7) was reported as "Unknown" and a
+        # transient rc=4 was escalated into a spurious reauth flow.
+        # Authentication failures legitimately arrive via CONNACK, so this
+        # handler now only ever reconnects.
         reason = {
-            1: "Unacceptable protocol version",
-            2: "Identifier rejected",
-            3: "Server unavailable",
-            4: "Bad username or password",
-            5: "Not authorized",
-        }.get(rc, "Unknown")
+            0: "Clean disconnect",
+            1: "Out of memory",
+            2: "Protocol error",
+            3: "Invalid arguments",
+            4: "No connection",
+            5: "Connection refused",
+            6: "Connection lost",
+            7: "Connection lost",
+            16: "Keepalive timeout",
+        }.get(rc, f"MQTT_ERR {rc}")
         _LOGGER.warning("BMW MQTT disconnected rc=%s (%s)", rc, reason)
         self._last_disconnect = time.monotonic()
         disconnect_future = self._disconnect_future
@@ -295,34 +342,13 @@ class CardataStreamManager:
         if isinstance(userdata, dict):
             should_reconnect = userdata.get("reconnect", True)
             userdata["reconnect"] = True
-        if rc in (4, 5):
-            now = time.monotonic()
-            if (
-                rc == 5
-                and self._last_disconnect is not None
-                and now - self._last_disconnect < 10
-            ):
-                if debug_enabled():
-                    _LOGGER.debug(
-                        "Ignoring transient MQTT rc=5; scheduling retry instead"
-                    )
-                self._schedule_retry(3)
-                return
-            asyncio.run_coroutine_threadsafe(self._handle_unauthorized(), self.hass.loop)
-            self._reconnect_backoff = min(self._reconnect_backoff * 2, self._max_backoff)
-            if self._status_callback:
-                asyncio.run_coroutine_threadsafe(
-                    self._status_callback("unauthorized", reason=reason),
-                    self.hass.loop,
-                )
-        else:
-            if should_reconnect:
-                asyncio.run_coroutine_threadsafe(self._async_reconnect(), self.hass.loop)
-            if self._status_callback:
-                asyncio.run_coroutine_threadsafe(
-                    self._status_callback("disconnected", reason=reason),
-                    self.hass.loop,
-                )
+        if should_reconnect:
+            asyncio.run_coroutine_threadsafe(self._async_reconnect(), self.hass.loop)
+        if self._status_callback:
+            asyncio.run_coroutine_threadsafe(
+                self._status_callback("disconnected", reason=reason),
+                self.hass.loop,
+            )
 
     async def _async_reconnect(self) -> None:
         await self.async_stop()
@@ -372,7 +398,9 @@ class CardataStreamManager:
         reconnect_required = False
 
         if gcid and gcid != self._gcid:
-            _LOGGER.debug("Updating MQTT GCID from %s to %s", self._gcid, gcid)
+            _LOGGER.debug(
+                "Updating MQTT GCID from %s to %s", _mask(self._gcid), _mask(gcid)
+            )
             self._gcid = gcid
             reconnect_required = True
 
@@ -417,11 +445,38 @@ class CardataStreamManager:
     async def async_update_token(self, id_token: Optional[str]) -> None:
         await self.async_update_credentials(id_token=id_token)
 
+    def _run_on_loop(self, func) -> None:
+        """Run func on the event loop, from whichever thread we are on.
+
+        loop.create_task and Task.cancel are not thread-safe, and paho invokes
+        the callbacks below on its own network thread. With HA started in debug
+        mode the loop's thread check raises straight into that callback and kills
+        the paho thread outright, leaving the connection dead with no reconnect.
+        """
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self.hass.loop:
+            func()
+        else:
+            self.hass.loop.call_soon_threadsafe(func)
+
     def _cancel_retry(self) -> None:
-        if self._retry_task and not self._retry_task.done():
-            self._retry_task.cancel()
-        self._retry_task = None
+        def _cancel() -> None:
+            if self._retry_task and not self._retry_task.done():
+                self._retry_task.cancel()
+            self._retry_task = None
+
+        self._run_on_loop(_cancel)
         self._retry_backoff = 3
+
+    def _start_retry_task(self, coro) -> None:
+        if self._retry_task is not None and not self._retry_task.done():
+            coro.close()
+            return
+        self._retry_task = self.hass.loop.create_task(coro)
 
     def _schedule_retry(self, delay: float) -> None:
         if self._retry_task is not None and not self._retry_task.done():
@@ -457,4 +512,4 @@ class CardataStreamManager:
             finally:
                 self._retry_task = None
 
-        self._retry_task = self.hass.loop.create_task(_retry())
+        self._run_on_loop(lambda: self._start_retry_task(_retry()))

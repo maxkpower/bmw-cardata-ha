@@ -13,14 +13,16 @@ _DEBUG_ENABLED = DEBUG_LOG
 def set_debug_enabled(value: bool) -> None:
     """Update the global debug flag.
 
-    Only forces the logger level when debug is explicitly switched on. Turning
-    it off resets to NOTSET so that a `logger:` block in configuration.yaml
-    stays authoritative instead of being overwritten on every reload.
+    Only ever raises the logger level, never lowers it - see the comment below.
     """
     global _DEBUG_ENABLED
     _DEBUG_ENABLED = value
-    logger = logging.getLogger(_LOGGER_NAMESPACE)
-    logger.setLevel(logging.DEBUG if value else logging.NOTSET)
+    if value:
+        logging.getLogger(_LOGGER_NAMESPACE).setLevel(logging.DEBUG)
+    # When disabling, leave the level alone. HA's `logger:` integration sets the
+    # level on this same logger object, so writing ANY level here - including
+    # NOTSET - overwrites an explicit `custom_components.cardata: debug` from
+    # configuration.yaml on every setup and reload.
 
 
 def debug_enabled() -> bool:

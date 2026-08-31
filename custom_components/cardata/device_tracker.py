@@ -120,12 +120,13 @@ class CardataDeviceTracker(CardataEntity, TrackerEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes."""
-        attrs: dict[str, Any] = {}
-        metadata = self._coordinator.device_metadata.get(self._vin)
-        if metadata:
-            if extra := metadata.get("extra_attributes"):
-                attrs["vehicle_basic_data"] = dict(extra)
-        return attrs
+        # Deliberately empty. Home Assistant injects latitude/longitude into
+        # this same dict, so anything constant added here is re-serialised into
+        # a new recorder state_attributes row on every GPS fix - and the VIN in
+        # particular must not sit next to live coordinates, where any non-admin
+        # HA user can read the pair straight out of Developer Tools. Vehicle
+        # metadata lives on the device registry entry.
+        return {}
 
     def _fetch_coordinate(self, descriptor: str) -> float | None:
         state = self._coordinator.get_state(self._vin, descriptor)

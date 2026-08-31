@@ -38,7 +38,8 @@
       "reauth_started": "Authorization restarted. Complete the new login flow from the notification.",
       "reauth_device_code_failed": "BMW rejected the device authorization request ({error}). Update the client ID in the integration options and try again.",
       "reauth_missing_client_id": "Client ID is missing for this integration entry. Remove and re-add the integration to authorize again.",
-      "reauth_failed": "Reauthorization could not be started. Try again from the integration options."
+      "reauth_failed": "Reauthorization could not be started. Try again from the integration options.",
+      "action_done": "Done."
     }
   }
 }

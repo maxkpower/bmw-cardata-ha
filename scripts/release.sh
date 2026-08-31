@@ -117,7 +117,21 @@ if [[ -z "$commit_message" ]]; then
   fi
 fi
 
-git -C "$repo_root" add .
+# Stage only what belongs in a release. `git add .` previously staged anything
+# in the tree - including a tokens.json written by the helper scripts into a
+# subdirectory, which would publish a live BMW refresh_token to a public repo.
+git -C "$repo_root" add -A -- custom_components hacs.json README.md scripts tools .github .gitignore requirements-dev.txt
+
+# Refuse to publish anything that looks like a credential.
+if git -C "$repo_root" diff --cached --name-only | grep -qiE '(^|/)(tokens|.*token.*|auth_seed|device_seed)\.json$'; then
+  echo "Refusing to release: a token/seed file is staged." >&2
+  git -C "$repo_root" diff --cached --name-only >&2
+  exit 1
+fi
+if git -C "$repo_root" diff --cached -U0 | grep -qE '^\+.*"(access_token|refresh_token|id_token|device_code)"'; then
+  echo "Refusing to release: staged diff contains a token field." >&2
+  exit 1
+fi
 
 if git -C "$repo_root" diff --cached --quiet; then
   echo "No changes staged. Nothing to commit." >&2

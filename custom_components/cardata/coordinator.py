@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -13,11 +14,55 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, DIAGNOSTIC_LOG_INTERVAL
+from .const import DOMAIN, DIAGNOSTIC_LOG_INTERVAL, mask_vin, vehicle_label
 from .debug import debug_enabled
 from .units import normalize_unit
 
 _LOGGER = logging.getLogger(__name__)
+
+# Values beyond this cannot be represented exactly as a float and are certainly
+# not real telemetry; float() on a very large int raises OverflowError outright.
+_MAX_SANE_NUMERIC = 2 ** 53
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    """Parse a payload timestamp, always returning an aware UTC datetime.
+
+    dt_util.parse_datetime returns a NAIVE datetime for an ISO string with no
+    offset. Storing that and later subtracting it from datetime.now(timezone.utc)
+    raises TypeError, which - because messages are dispatched fire-and-forget -
+    is swallowed silently and permanently kills the diagnostics watchdog.
+    """
+
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = dt_util.parse_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_sane_number(value: Any) -> bool:
+    """Reject NaN, +/-Infinity and ints too large to become a float.
+
+    json.loads accepts the bare literals NaN/Infinity and turns 1e400 into inf.
+    NaN then passes straight through every `> 100` / `< 0` clamp (all comparisons
+    with NaN are False), poisons the SOC estimate and its long-term statistics,
+    and survives a restart because float("nan") parses back cleanly.
+    """
+
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, float):
+        return not (math.isnan(value) or math.isinf(value))
+    if isinstance(value, int):
+        return abs(value) <= _MAX_SANE_NUMERIC
+    return True
 
 
 @dataclass
@@ -143,6 +188,10 @@ class SocTracking:
             self.rate_per_hour = None
             return
         if self.last_power_w in (None, 0) or self.max_energy_kwh in (None, 0):
+            # Clear it: charging power reaching 0 while status is still
+            # CHARGINGACTIVE otherwise kept the last non-zero rate and carried on
+            # climbing the predicted SOC after charging had actually stopped.
+            self.rate_per_hour = None
             return
         self.rate_per_hour = (self.last_power_w / 1000.0) / self.max_energy_kwh * 100.0
 
@@ -321,9 +370,16 @@ class CardataCoordinator:
             if not isinstance(descriptor_payload, dict):
                 continue
             value = descriptor_payload.get("value")
+            if not _is_sane_number(value):
+                _LOGGER.debug(
+                    "Dropping non-finite value for %s on %s", descriptor, mask_vin(vin)
+                )
+                continue
             unit = normalize_unit(descriptor_payload.get("unit"))
             timestamp = descriptor_payload.get("timestamp")
-            parsed_ts = dt_util.parse_datetime(timestamp) if timestamp else None
+            if not isinstance(timestamp, str):
+                timestamp = None
+            parsed_ts = _parse_timestamp(timestamp)
             if value is None:
                 if descriptor == "vehicle.powertrain.electric.battery.stateOfCharge.target":
                     tracking.update_target_soc(None, parsed_ts)
@@ -574,8 +630,12 @@ class CardataCoordinator:
         unit: Optional[str],
         timestamp: Optional[str],
     ) -> None:
-        parsed_ts = dt_util.parse_datetime(timestamp) if timestamp else None
+        parsed_ts = _parse_timestamp(timestamp)
         unit = normalize_unit(unit)
+        if not _is_sane_number(value):
+            # A NaN persisted into a restored state would otherwise be reinstated
+            # on every restart, re-poisoning the SOC estimate for good.
+            return
         if value is None:
             if descriptor == "vehicle.powertrain.electric.battery.stateOfCharge.target":
                 tracking = self._soc_tracking.setdefault(vin, SocTracking())
@@ -763,7 +823,7 @@ class CardataCoordinator:
             payload.get("modelName")
             or payload.get("modelRange")
             or payload.get("series")
-            or vin
+            or vehicle_label(vin)
         )
         brand = payload.get("brand") or "BMW"
         raw_payload = dict(payload)

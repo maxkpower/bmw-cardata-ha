@@ -19,7 +19,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 from homeassistant.const import UnitOfLength
 
-from .const import DOMAIN
+from .const import DOMAIN, is_location_descriptor
 from .coordinator import CardataCoordinator
 from .entity import CardataEntity
 
@@ -388,12 +388,12 @@ async def async_setup_entry(
             return
         
         # Filter out location descriptors - these are used by device_tracker only
-        location_descriptors = [
-            "vehicle.cabin.infotainment.navigation.currentLocation.latitude",
-            "vehicle.cabin.infotainment.navigation.currentLocation.longitude",
-            "vehicle.cabin.infotainment.navigation.currentLocation.heading",
-        ]
-        if descriptor in location_descriptors:
+        # Coordinates belong on the device_tracker only. As a sensor the value
+        # lands in the recorder `states` table, /api/history and the logbook as
+        # a full location time series readable by any HA user. The old list here
+        # covered only currentLocation, leaving destinationSet (the address you
+        # last navigated to), altitude, and trip-segment gpsPosition exposed.
+        if is_location_descriptor(descriptor):
             return
         
         state = coordinator.get_state(vin, descriptor)

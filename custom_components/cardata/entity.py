@@ -8,7 +8,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import DOMAIN
+from .const import DOMAIN, vehicle_label
 from .coordinator import CardataCoordinator
 from .descriptor_titles import DESCRIPTOR_TITLES
 
@@ -27,7 +27,9 @@ class CardataEntity(RestoreEntity):
     @property
     def device_info(self) -> DeviceInfo:
         metadata = self._coordinator.device_metadata.get(self._vin, {})
-        name = metadata.get("name") or self._coordinator.names.get(self._vin, self._vin)
+        name = metadata.get("name") or self._coordinator.names.get(
+            self._vin, vehicle_label(self._vin)
+        )
         manufacturer = metadata.get("manufacturer", "BMW")
         info: DeviceInfo = {
             "identifiers": {(DOMAIN, self._vin)},
@@ -79,7 +81,7 @@ class CardataEntity(RestoreEntity):
             if p and p.lower() != "vehicle"
         ]
         title = " ".join(p.capitalize() for p in parts)
-        return title or self._vin
+        return title or vehicle_label(self._vin)
 
     def _get_vehicle_name(self) -> Optional[str]:
         metadata = self._coordinator.device_metadata.get(self._vin)
@@ -88,7 +90,7 @@ class CardataEntity(RestoreEntity):
         return self._coordinator.names.get(self._vin)
 
     def _compute_full_name(self) -> str:
-        base = self._base_name or self._vin
+        base = self._base_name or vehicle_label(self._vin)
         vehicle_name = self._get_vehicle_name()
         if not vehicle_name:
             return base

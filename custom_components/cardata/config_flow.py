@@ -205,6 +205,7 @@ class CardataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if runtime:
                     runtime.reauth_in_progress = False
                     runtime.reauth_flow_id = None
+                    runtime.reauth_pending = False
             return self.async_abort(
                 reason="reauth_device_code_failed",
                 description_placeholders={"error": str(err)},
@@ -276,7 +277,7 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
                 errors={"base": "refresh_failed"},
                 placeholders={"error": str(err)},
             )
-        return self.async_create_entry(title="", data={})
+        return self.async_abort(reason="action_done")
 
     async def async_step_action_reauth(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -336,7 +337,7 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
             {"entry_id": self._config_entry.entry_id},
             blocking=True,
         )
-        return self.async_create_entry(title="", data={})
+        return self.async_abort(reason="action_done")
 
     def _collect_vins(self) -> list[str]:
         runtime = self._get_runtime()
@@ -380,7 +381,7 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
                 {"entry_id": self._config_entry.entry_id, "vin": vin},
                 blocking=True,
             )
-        return self.async_create_entry(title="", data={})
+        return self.async_abort(reason="action_done")
 
     async def async_step_action_fetch_telematic(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -405,7 +406,7 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
             {"entry_id": self._config_entry.entry_id},
             blocking=True,
         )
-        return self.async_create_entry(title="", data={})
+        return self.async_abort(reason="action_done")
 
     async def async_step_action_reset_container(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -476,7 +477,7 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
             updated.pop("hv_descriptor_signature", None)
         self.hass.config_entries.async_update_entry(entry, data=updated)
 
-        return self.async_create_entry(title="", data={})
+        return self.async_abort(reason="action_done")
 
     async def _handle_reauth(self) -> FlowResult:
         entry = self._config_entry

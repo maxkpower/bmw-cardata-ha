@@ -1,15 +1,20 @@
-# BMW tokens
-/tokens.json
-/auth_seed.json
-/streaming_scopes.txt
-/streaming_scopes_prefixed.txt
-/device_seed.json
+# BMW tokens and auth artefacts.
+# NOT anchored with a leading slash: the helper scripts default to RELATIVE
+# paths, so running one from inside scripts/ writes scripts/tokens.json, which
+# an anchored /tokens.json rule does not match. release.sh then stages it.
+tokens.json
+*token*.json
+auth_seed.json
+device_seed.json
+streaming_scopes.txt
+streaming_scopes_prefixed.txt
+streaming_scopes_filtered.txt
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
- 
+
 # Committed virtualenv removed - never track one
 .venv/
 .DS_Store

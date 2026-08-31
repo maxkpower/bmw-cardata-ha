@@ -7,7 +7,7 @@ fetch_telematic_data:
       example: 01K65NKFESKBQZ78PBW6V9BCCX
     vin:
       description: Optional VIN to query. Defaults to the first VIN seen on the stream.
-      example: WBY31AW090FP15359
+      example: WBAEXAMPLE0000001
 fetch_vehicle_mappings:
   name: Fetch Vehicle Mappings
   description: Fetch mapping information for the configured account and log the response.
@@ -24,4 +24,4 @@ fetch_basic_data:
       example: 01K65NKFESKBQZ78PBW6V9BCCX
     vin:
       description: Optional VIN to query. Defaults to the VIN stored in the config entry.
-      example: WBY31AW090FP15359
+      example: WBAEXAMPLE0000001
