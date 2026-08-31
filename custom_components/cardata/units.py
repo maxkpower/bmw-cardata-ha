@@ -8,6 +8,15 @@ from typing import Dict, Optional
 # Extend this as new variants appear in either streaming or API payloads.
 UNIT_OVERRIDES: Dict[str, str] = {
     "percent": "%",
+    # The catalogue publishes temperature as both "Celsius" and "celsius"
+    # (engine coolant and tire temperatures use the first spelling, the
+    # preconditioning target temperatures the second). The lookup below
+    # lowercases, so one entry canonicalises both to the symbol Home Assistant
+    # expects for SensorDeviceClass.TEMPERATURE.
+    "celsius": "°C",
+    # BMW spells litres "l"; Home Assistant's UnitOfVolume.LITERS is "L", and
+    # the device class is rejected unless the unit matches exactly.
+    "l": "L",
 }
 
 

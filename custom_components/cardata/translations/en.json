@@ -24,7 +24,26 @@
     "step": {
       "init": {
         "title": "Manual actions",
-        "description": "Select the action you want to run. Refresh tokens tries to just refresh the tokens without reauth. We suggest restarting HA after that if you have problems."
+        "description": "Select the action you want to run. Refresh tokens tries to just refresh the tokens without reauth. We suggest restarting HA after that if you have problems.",
+        "menu_options": {
+          "action_refresh_tokens": "Refresh tokens",
+          "action_reauth": "Start device authorization again",
+          "action_fetch_mappings": "Initiate vehicles (API)",
+          "action_fetch_basic": "Get basic vehicle information (API)",
+          "action_fetch_telematic": "Get telematics data (API)",
+          "action_reset_container": "Reset telemetry container",
+          "action_location_sensors": "Location sensors (records a location history)"
+        }
+      },
+      "action_location_sensors": {
+        "title": "Location sensors",
+        "description": "This is off by default. The car's position is shown on its Location map entity, and the coordinates behind it are not stored as sensors.\n\nTurn this on and latitude, longitude, altitude and heading each become a sensor. Home Assistant records every value a sensor reports, so this builds a permanent history of where the vehicle has been - every position it reports, with a timestamp - held in Home Assistant's database until you purge or shorten the recorder history, and readable in History, in the logbook and by every Home Assistant user who can see the entities. That history is exactly what route tracking needs, but it is not something to switch on by accident.\n\nSaving reloads the integration so the change takes effect immediately. Turning it back off later stops new values being recorded; it does not delete what is already stored - the sensors stay in the entity registry as unavailable until you remove them, and past values remain in the database until the recorder purges them.",
+        "data": {
+          "expose_location_sensors": "Record location as sensors (permanent location history)"
+        },
+        "data_description": {
+          "expose_location_sensors": "Enabling this records a permanent history of the vehicle's location in Home Assistant's database."
+        }
       }
     },
     "error": {
@@ -39,7 +58,9 @@
       "reauth_device_code_failed": "BMW rejected the device authorization request ({error}). Update the client ID in the integration options and try again.",
       "reauth_missing_client_id": "Client ID is missing for this integration entry. Remove and re-add the integration to authorize again.",
       "reauth_failed": "Reauthorization could not be started. Try again from the integration options.",
-      "action_done": "Done."
+      "action_done": "Done.",
+      "location_sensors_enabled": "Location sensors enabled. The integration is reloading. From now on the vehicle's latitude, longitude, altitude and heading are recorded as a permanent location history in Home Assistant's database.",
+      "location_sensors_disabled": "Location sensors disabled. The integration is reloading and no new location values will be recorded. The sensors already created stay in the entity registry as unavailable until you remove them, and the location history already stored remains in the database until the recorder purges it."
     }
   }
 }

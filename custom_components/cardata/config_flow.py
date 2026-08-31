@@ -23,8 +23,10 @@ from homeassistant.data_entry_flow import FlowResult, FlowResultType
 from . import async_manual_refresh_tokens
 from .container import CardataContainerError
 from .const import (
+    DEFAULT_EXPOSE_LOCATION_SENSORS,
     DEFAULT_SCOPE,
     DOMAIN,
+    OPTION_EXPOSE_LOCATION_SENSORS,
     VEHICLE_METADATA,
 )
 from .device_flow import CardataAuthError, poll_for_tokens, request_device_code
@@ -235,6 +237,9 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
                 "action_fetch_basic": "Get basic vehicle information (API)",
                 "action_fetch_telematic": "Get telematics data (API)",
                 "action_reset_container": "Reset telemetry container",
+                "action_location_sensors": (
+                    "Location sensors (records a location history)"
+                ),
             },
         )
 
@@ -476,6 +481,63 @@ class CardataOptionsFlowHandler(config_entries.OptionsFlow):
             updated.pop("hv_container_id", None)
             updated.pop("hv_descriptor_signature", None)
         self.hass.config_entries.async_update_entry(entry, data=updated)
+
+        return self.async_abort(reason="action_done")
+
+    async def async_step_action_location_sensors(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> FlowResult:
+        """Opt in to - or back out of - coordinates published as sensors.
+
+        Unlike the other entries in this menu this one has a lasting side
+        effect rather than a one-off action: every value a sensor publishes is
+        written to the recorder, so switching it on starts building a permanent
+        location history of the vehicle. The consequence is spelled out on the
+        form itself (options.step.action_location_sensors in translations), not
+        just in the documentation, because that is where it will be read.
+        """
+
+        current = bool(
+            self._config_entry.options.get(
+                OPTION_EXPOSE_LOCATION_SENSORS, DEFAULT_EXPOSE_LOCATION_SENSORS
+            )
+        )
+        schema = vol.Schema(
+            {vol.Required(OPTION_EXPOSE_LOCATION_SENSORS, default=current): bool}
+        )
+        if user_input is None:
+            return self.async_show_form(
+                step_id="action_location_sensors", data_schema=schema
+            )
+
+        enabled = bool(user_input.get(OPTION_EXPOSE_LOCATION_SENSORS, current))
+
+        # Written straight onto the entry instead of via async_create_entry:
+        # the options flow manager only persists a create_entry result *after*
+        # this step returns, so a reload scheduled here would still see the old
+        # value. Updating first and then scheduling keeps the ordering
+        # deterministic, and matches the abort-based style of every other
+        # action in this menu.
+        options = dict(self._config_entry.options)
+        options[OPTION_EXPOSE_LOCATION_SENSORS] = enabled
+        self.hass.config_entries.async_update_entry(
+            self._config_entry, options=options
+        )
+
+        if enabled != current:
+            # Entities are only added or dropped in sensor.async_setup_entry,
+            # so nothing changes until the entry is set up again, and this
+            # integration registers no update listener. async_schedule_reload
+            # has been available since 2024.2, below the 2024.6.0 floor
+            # declared in hacs.json.
+            self.hass.config_entries.async_schedule_reload(
+                self._config_entry.entry_id
+            )
+            return self.async_abort(
+                reason="location_sensors_enabled"
+                if enabled
+                else "location_sensors_disabled"
+            )
 
         return self.async_abort(reason="action_done")
 

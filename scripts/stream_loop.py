@@ -102,9 +102,9 @@ def build_client(
 
     context = ssl.create_default_context()
     if hasattr(ssl, "TLSVersion"):
+        # Floor at TLS 1.2; do NOT pin a maximum. BMW's broker now negotiates
+        # TLS 1.3 and rejects a client that caps itself at 1.2.
         context.minimum_version = ssl.TLSVersion.TLSv1_2
-        if hasattr(context, "maximum_version"):
-            context.maximum_version = ssl.TLSVersion.TLSv1_2
     client.tls_set_context(context)
     client.tls_insecure_set(False)
     client.reconnect_delay_set(min_delay=5, max_delay=60)

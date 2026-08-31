@@ -64,6 +64,15 @@ OPTION_MQTT_KEEPALIVE = "mqtt_keepalive"
 OPTION_DEBUG_LOG = "debug_log"
 OPTION_DIAGNOSTIC_INTERVAL = "diagnostic_log_interval"
 
+# Opt-in to publishing the descriptors is_location_descriptor() matches as
+# ordinary sensors. Off by default: a sensor's every value is written to the
+# recorder, so turning this on builds a permanent, timestamped location history
+# of the vehicle. It exists because that history is exactly what route tracking
+# needs - but nobody gets it without asking. Read from entry.options at the
+# point of use, never cached, so a reload picks up a change.
+OPTION_EXPOSE_LOCATION_SENSORS = "expose_location_sensors"
+DEFAULT_EXPOSE_LOCATION_SENSORS = False
+
 HV_BATTERY_CONTAINER_NAME = "BimmerData HV Battery"
 HV_BATTERY_CONTAINER_PURPOSE = "High voltage battery telemetry"
 HV_BATTERY_DESCRIPTORS = [

@@ -17,11 +17,85 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
-from homeassistant.const import UnitOfLength
+from homeassistant.const import (
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfLength,
+    UnitOfPower,
+    UnitOfPressure,
+    UnitOfSpeed,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfVolume,
+)
 
-from .const import DOMAIN, is_location_descriptor
+from .const import (
+    DEFAULT_EXPOSE_LOCATION_SENSORS,
+    DOMAIN,
+    OPTION_EXPOSE_LOCATION_SENSORS,
+    is_location_descriptor,
+)
 from .coordinator import CardataCoordinator
 from .entity import CardataEntity
+from .units import normalize_unit
+
+
+# Device class implied by a canonical unit, keyed on the output of
+# normalize_unit(). Deliberately an explicit table rather than a loop over the
+# UnitOfX enums: those enums overlap -- UnitOfTime.MONTHS and
+# UnitOfLength.METERS are both "m" -- so a loop silently assigns whichever enum
+# happened to be registered last. Only units BMW actually publishes are listed;
+# see the CarData catalogue in ./descriptos.
+UNIT_DEVICE_CLASSES: Dict[str, SensorDeviceClass] = {
+    UnitOfLength.KILOMETERS.value: SensorDeviceClass.DISTANCE,        # km
+    UnitOfEnergy.KILO_WATT_HOUR.value: SensorDeviceClass.ENERGY,      # kWh
+    UnitOfPressure.KPA.value: SensorDeviceClass.PRESSURE,             # kPa
+    UnitOfElectricCurrent.AMPERE.value: SensorDeviceClass.CURRENT,    # A
+    UnitOfElectricPotential.VOLT.value: SensorDeviceClass.VOLTAGE,    # V
+    UnitOfPower.WATT.value: SensorDeviceClass.POWER,                  # W
+    UnitOfPower.KILO_WATT.value: SensorDeviceClass.POWER,             # kW
+    UnitOfTemperature.CELSIUS.value: SensorDeviceClass.TEMPERATURE,   # °C
+    UnitOfVolume.LITERS.value: SensorDeviceClass.VOLUME,              # L
+    UnitOfSpeed.KILOMETERS_PER_HOUR.value: SensorDeviceClass.SPEED,   # km/h
+    UnitOfTime.SECONDS.value: SensorDeviceClass.DURATION,             # s
+    UnitOfTime.MINUTES.value: SensorDeviceClass.DURATION,             # min
+}
+
+# Descriptors whose unit looks like a duration but is really a clock field
+# (hour-of-day 0-23, minute-of-hour 0-59). A DURATION device class would let HA
+# unit-convert them and render "23 h" as "1380 min".
+CLOCK_FIELD_DESCRIPTORS = frozenset(
+    {
+        "vehicle.cabin.climate.timers.overwriteTimer.hour",
+        "vehicle.cabin.climate.timers.overwriteTimer.minute",
+        "vehicle.cabin.climate.timers.weekdaysTimer1.hour",
+        "vehicle.cabin.climate.timers.weekdaysTimer1.minute",
+        "vehicle.cabin.climate.timers.weekdaysTimer2.hour",
+        "vehicle.cabin.climate.timers.weekdaysTimer2.minute",
+    }
+)
+
+
+def _numeric_or_none(value: Any) -> Any:
+    """Return *value* if HA can read it as a number, otherwise None.
+
+    BMW publishes documented placeholders in the same field as the reading --
+    "INVALID" for most numeric descriptors, "-NA-" for tire pressure, AC
+    voltage and AC current. Handing one of those to a sensor that declares a
+    numeric device class makes HA log a ValueError and discard the update, so
+    they are surfaced as "unknown" instead.
+    """
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return None
+    return value
 
 
 class CardataSensor(CardataEntity, SensorEntity):
@@ -31,19 +105,30 @@ class CardataSensor(CardataEntity, SensorEntity):
         self._unsubscribe = None
         if self._descriptor == "vehicle.vehicle.travelledDistance":
             self._attr_state_class = SensorStateClass.TOTAL_INCREASING
-    
+
+    def _apply_unit(self, unit: Any) -> None:
+        """Set the native unit and the device class that unit implies."""
+        unit = normalize_unit(unit)
+        self._attr_native_unit_of_measurement = unit
+        if unit is None or self._descriptor in CLOCK_FIELD_DESCRIPTORS:
+            self._attr_device_class = None
+        else:
+            self._attr_device_class = UNIT_DEVICE_CLASSES.get(unit)
+
+    def _set_native_value(self, value: Any) -> None:
+        """Store *value*, dropping BMW placeholders on numeric sensors."""
+        if self._attr_device_class is not None:
+            value = _numeric_or_none(value)
+        self._attr_native_value = value
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if getattr(self, "_attr_native_value", None) is None:
             last_state = await self.async_get_last_state()
             if last_state and last_state.state not in ("unknown", "unavailable"):
-                self._attr_native_value = last_state.state
-                unit = last_state.attributes.get("unit_of_measurement")
-                if unit is not None:
-                    self._attr_native_unit_of_measurement = unit
-                    # If unit is a length/distance type, enable conversion
-                    if unit in {u.value for u in UnitOfLength}:
-                        self._attr_device_class = SensorDeviceClass.DISTANCE # Enables km/mi, m/ft, etc., conversion
+                unit = normalize_unit(last_state.attributes.get("unit_of_measurement"))
+                self._apply_unit(unit)
+                self._set_native_value(last_state.state)
                 timestamp = last_state.attributes.get("timestamp")
                 if not timestamp and last_state.last_changed:
                     timestamp = last_state.last_changed.isoformat()
@@ -73,8 +158,8 @@ class CardataSensor(CardataEntity, SensorEntity):
         state = self._coordinator.get_state(vin, descriptor)
         if not state:
             return
-        self._attr_native_value = state.value
-        self._attr_native_unit_of_measurement = state.unit
+        self._apply_unit(state.unit)
+        self._set_native_value(state.value)
 
         self.schedule_update_ha_state()
 
@@ -189,7 +274,6 @@ class CardataSocEstimateSensor(CardataEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "%"
-    _attr_icon = "mdi:battery-clock"
 
     def __init__(self, coordinator: CardataCoordinator, vin: str) -> None:
         super().__init__(coordinator, vin, "soc_estimate")
@@ -243,9 +327,9 @@ class CardataSocEstimateSensor(CardataEntity, SensorEntity):
 
 class CardataTestingSocEstimateSensor(CardataEntity, SensorEntity):
     _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "%"
-    _attr_icon = "mdi:battery-clock"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: CardataCoordinator, vin: str) -> None:
@@ -382,20 +466,38 @@ async def async_setup_entry(
         if new_entities:
             async_add_entities(new_entities, True)
 
+    def expose_location_sensors() -> bool:
+        """Whether the user has opted in to coordinates as sensors.
+
+        Read from entry.options on every call rather than captured once: the
+        options flow reloads the entry, and reading late keeps the default
+        (False) authoritative for anyone who never opens that screen.
+        """
+
+        return bool(
+            entry.options.get(
+                OPTION_EXPOSE_LOCATION_SENSORS, DEFAULT_EXPOSE_LOCATION_SENSORS
+            )
+        )
+
     def ensure_entity(vin: str, descriptor: str, *, assume_sensor: bool = False) -> None:
         ensure_soc_tracking_entities(vin)
         if (vin, descriptor) in entities:
             return
-        
+
         # Filter out location descriptors - these are used by device_tracker only
         # Coordinates belong on the device_tracker only. As a sensor the value
         # lands in the recorder `states` table, /api/history and the logbook as
         # a full location time series readable by any HA user. The old list here
         # covered only currentLocation, leaving destinationSet (the address you
         # last navigated to), altitude, and trip-segment gpsPosition exposed.
-        if is_location_descriptor(descriptor):
+        # That time series is precisely what route history needs, so it is
+        # available behind an explicit opt-in - but the default stays off, and
+        # an installation that never touches the option behaves exactly as if
+        # this branch were unconditional.
+        if is_location_descriptor(descriptor) and not expose_location_sensors():
             return
-        
+
         state = coordinator.get_state(vin, descriptor)
         if state:
             if isinstance(state.value, bool):
