@@ -10,3 +10,6 @@ __pycache__/
 *.pyc
 *.pyo
  
+# Committed virtualenv removed - never track one
+.venv/
+.DS_Store

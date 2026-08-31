@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Helper scripts in scripts/ and tools/. This is the only dependency
+  # manifest in the repo - the integration itself takes its runtime deps
+  # from Home Assistant, so Dependabot cannot see or update those.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+
+  # No workflows exist yet; this activates automatically if any are added.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"

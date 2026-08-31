@@ -1,0 +1,7 @@
+# Dependencies for the helper scripts in scripts/ and tools/ only.
+#
+# The integration itself declares no requirements: Home Assistant supplies
+# aiohttp and voluptuous, and paho-mqtt comes from HA's own mqtt integration.
+# Nothing here is installed into Home Assistant.
+paho-mqtt>=1.6.1
+requests>=2.32.5
