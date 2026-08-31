@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+import re
+from typing import Any, Dict, Optional, Tuple
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -161,6 +162,85 @@ class CardataSensor(CardataEntity, SensorEntity):
         self._apply_unit(state.unit)
         self._set_native_value(state.value)
 
+        self.schedule_update_ha_state()
+
+
+DTC_RAW_DESCRIPTOR = "vehicle.electronicControlUnit.diagnosticTroubleCodes.raw"
+
+# BMW answers this descriptor with a ~1.5 KB <dtcData> XML document listing every
+# stored fault code. It can never be a sensor state: Home Assistant caps a state
+# at 255 characters and coerces it to a float, so publishing it raised
+# ValueError and the entity was dropped entirely on 2026-08-31. The two counts on
+# the root element carry the signal, so they are published as plain numbers and
+# the document is discarded - deliberately not kept as an attribute either, since
+# attributes are written to the recorder on every update just as states are.
+#
+# Read with a regex rather than an XML parser on purpose: this is third-party
+# input and all that is wanted are two integers off the root tag, not a document
+# model and not an entity resolver.
+DTC_COUNT_PATTERNS = {
+    "dtcCount": re.compile(r'\bdtcCount\s*=\s*"(\d+)"'),
+    "countEcuWithErrors": re.compile(r'\bcountEcuWithErrors\s*=\s*"(\d+)"'),
+}
+
+DTC_DERIVED_SENSORS = (
+    ("dtcCount", "Fault codes stored", "mdi:car-wrench"),
+    ("countEcuWithErrors", "Control units with faults", "mdi:chip"),
+)
+
+
+class CardataDtcCountSensor(CardataSensor):
+    """One integer parsed out of the raw DTC document.
+
+    Subscribes to the same descriptor as any other sensor - the coordinator is
+    unchanged - but publishes a count instead of the document itself.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: CardataCoordinator,
+        vin: str,
+        descriptor: str,
+        *,
+        attribute: str,
+        label: str,
+        icon: str,
+    ) -> None:
+        self._attribute = attribute
+        super().__init__(coordinator, vin, descriptor)
+        # Distinct from the raw descriptor's unique_id, so the two derived
+        # sensors coexist and neither inherits the dead entity's registry entry.
+        self._attr_unique_id = f"{vin}_{descriptor}#{attribute}"
+        self._base_name = label
+        self._attr_name = self._compute_full_name()
+        self._attr_icon = icon
+
+    def _apply_unit(self, unit: Any) -> None:
+        # A count of faults has no unit, so no unit-implied device class either.
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+
+    def _set_native_value(self, value: Any) -> None:
+        # Reached only from the restore path, where the stored state is a count
+        # this class published earlier, never the XML document.
+        self._attr_native_value = _numeric_or_none(value)
+
+    def _extract(self, value: Any) -> Optional[int]:
+        if not isinstance(value, str):
+            return None
+        match = DTC_COUNT_PATTERNS[self._attribute].search(value)
+        return int(match.group(1)) if match else None
+
+    def _handle_update(self, vin: str, descriptor: str) -> None:
+        if vin != self.vin or descriptor != self.descriptor:
+            return
+        state = self._coordinator.get_state(vin, descriptor)
+        if not state:
+            return
+        self._apply_unit(None)
+        self._attr_native_value = self._extract(state.value)
         self.schedule_update_ha_state()
 
 
@@ -504,11 +584,39 @@ async def async_setup_entry(
                 return
         elif not assume_sensor:
             return
+        if descriptor == DTC_RAW_DESCRIPTOR:
+            for attribute, label, icon in DTC_DERIVED_SENSORS:
+                key = (vin, f"{descriptor}#{attribute}")
+                if key in entities:
+                    continue
+                derived = CardataDtcCountSensor(
+                    coordinator,
+                    vin,
+                    descriptor,
+                    attribute=attribute,
+                    label=label,
+                    icon=icon,
+                )
+                entities[key] = derived
+                async_add_entities([derived])
+            return
+
         entity = CardataSensor(coordinator, vin, descriptor)
         entities[(vin, descriptor)] = entity
         async_add_entities([entity])
 
     entity_registry = er.async_get(hass)
+
+    # The raw DTC document was published as a sensor until 2026-08-31 and could
+    # never work (see DTC_RAW_DESCRIPTOR). It is split into two counts now, so
+    # remove the old entity rather than leave it stranded as unavailable.
+    for entity_entry in er.async_entries_for_config_entry(
+        entity_registry, entry.entry_id
+    ):
+        if entity_entry.unique_id and entity_entry.unique_id.endswith(
+            f"_{DTC_RAW_DESCRIPTOR}"
+        ):
+            entity_registry.async_remove(entity_entry.entity_id)
     legacy_unique_ids = {
         f"{entry.entry_id}_connection_status": f"{entry.entry_id}_diagnostics_connection_status",
         f"{entry.entry_id}_last_message": f"{entry.entry_id}_diagnostics_last_message",
