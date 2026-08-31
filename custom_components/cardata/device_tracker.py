@@ -125,8 +125,6 @@ class CardataDeviceTracker(CardataEntity, TrackerEntity):
         if metadata:
             if extra := metadata.get("extra_attributes"):
                 attrs["vehicle_basic_data"] = dict(extra)
-            if raw := metadata.get("raw_data"):
-                attrs["vehicle_basic_data_raw"] = dict(raw)
         return attrs
 
     def _fetch_coordinate(self, descriptor: str) -> float | None:

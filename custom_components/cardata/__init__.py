@@ -423,7 +423,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         payload = json.loads(text)
                     except json.JSONDecodeError:
                         payload = text
-                    _LOGGER.info("Cardata vehicle mappings: %s", payload)
+                    _LOGGER.debug("Cardata vehicle mappings: %s", payload)
             except aiohttp.ClientError as err:
                 _LOGGER.error(
                     "Cardata fetch_vehicle_mappings: network error: %s",
@@ -500,7 +500,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         payload = json.loads(text)
                     except json.JSONDecodeError:
                         payload = text
-                    _LOGGER.info("Cardata basic data for %s: %s", vin, payload)
+                    _LOGGER.debug("Cardata basic data for %s: %s", vin, payload)
                     if isinstance(payload, dict):
                         metadata = runtime.coordinator.apply_basic_data(vin, payload)
                         if metadata:
@@ -1215,7 +1215,7 @@ async def _async_perform_telematic_fetch(
                 payload = json.loads(text)
             except json.JSONDecodeError:
                 payload = text
-            _LOGGER.info("Cardata telematic data for %s: %s", vin, payload)
+            _LOGGER.debug("Cardata telematic data for %s: %s", vin, payload)
             telematic_payload = None
             if isinstance(payload, dict):
                 telematic_payload = payload.get("telematicData") or payload.get("data")

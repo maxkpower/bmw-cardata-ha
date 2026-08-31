@@ -56,14 +56,10 @@ class CardataEntity(RestoreEntity):
         attrs = {}
         if state.timestamp:
             attrs["timestamp"] = state.timestamp
-        metadata = self._coordinator.device_metadata.get(self._vin)
-        if metadata:
-            extra = metadata.get("extra_attributes")
-            if extra:
-                attrs.setdefault("vehicle_basic_data", dict(extra))
-            raw = metadata.get("raw_data")
-            if raw:
-                attrs.setdefault("vehicle_basic_data_raw", dict(raw))
+        # Vehicle metadata deliberately NOT copied here. It carries the VIN and
+        # the full basicData payload, and this runs for every sensor - which put
+        # the VIN on hundreds of entities and bloated the recorder DB. It lives
+        # on the device registry entry and on the device_tracker instead.
         return attrs
 
     @property

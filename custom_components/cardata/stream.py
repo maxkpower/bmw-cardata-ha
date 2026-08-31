@@ -19,6 +19,14 @@ from .debug import debug_enabled
 _LOGGER = logging.getLogger(__name__)
 
 
+def _mask(value: Optional[str]) -> str:
+    """Return an identifier truncated enough to be safe in state attributes."""
+
+    if not value:
+        return ""
+    return f"{value[:8]}..." if len(value) > 8 else "..."
+
+
 class CardataStreamManager:
     """Manage the MQTT connection to BMW CarData."""
 
@@ -130,28 +138,37 @@ class CardataStreamManager:
     def debug_info(self) -> dict[str, str | int | bool]:
         """Return connection parameters for diagnostics."""
 
+        # These values surface as state attributes on a diagnostic sensor, which
+        # is readable by every HA user and is written to the recorder DB and to
+        # backups. Never put a credential in here - identifiers stay truncated
+        # and the id_token is reported only as a length.
         return {
-            "client_id": self._client_id,
-            "gcid": self._gcid,
+            "client_id": _mask(self._client_id),
+            "gcid": _mask(self._gcid),
             "host": self._host,
             "port": self._port,
             "keepalive": self._keepalive,
-            "topic": f"{self._gcid}/+",
+            "topic": f"{_mask(self._gcid)}/+",
             "clean_session": True,
             "protocol": "MQTTv311",
-            "id_token": self._password,
+            "id_token_length": len(self._password or ""),
         }
 
     def _start_client(self) -> None:
         client_id = self._gcid
-        client = mqtt.Client(
-            client_id=client_id,
-            clean_session=True,
+        client_kwargs = {
+            "client_id": client_id,
+            "clean_session": True,
             # Subscribe only to direct VIN topics. Do not modify this unless BMW changes the stream contract.
-            userdata={"topic": f"{self._gcid}/+"},
-            protocol=mqtt.MQTTv311,
-            transport="tcp",
-        )
+            "userdata": {"topic": f"{self._gcid}/+"},
+            "protocol": mqtt.MQTTv311,
+            "transport": "tcp",
+        }
+        # paho-mqtt 2.x requires an explicit callback API version and rejects the
+        # call without one. The callbacks below use the v1 signatures.
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            client_kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION1
+        client = mqtt.Client(**client_kwargs)
         if debug_enabled():
             _LOGGER.debug(
                 "Initializing MQTT client: client_id=%s host=%s port=%s",
@@ -172,9 +189,9 @@ class CardataStreamManager:
         client.on_disconnect = self._handle_disconnect
         context = ssl.create_default_context()
         if hasattr(ssl, "TLSVersion"):
+            # Floor at TLS 1.2; do NOT pin a maximum. BMW's broker now negotiates
+            # TLS 1.3 and rejects a client that caps itself at 1.2.
             context.minimum_version = ssl.TLSVersion.TLSv1_2
-            if hasattr(context, "maximum_version"):
-                context.maximum_version = ssl.TLSVersion.TLSv1_2
         client.tls_set_context(context)
         client.tls_insecure_set(False)
         client.reconnect_delay_set(min_delay=5, max_delay=60)
@@ -240,14 +257,20 @@ class CardataStreamManager:
 
     def _handle_message(self, client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         payload = msg.payload.decode(errors="ignore")
-        if debug_enabled():
-            _LOGGER.debug("BMW MQTT message on %s: %s", msg.topic, payload)
         if not self._message_callback:
             return
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
             return
+        if debug_enabled():
+            # Descriptor names only. The values include live GPS coordinates and
+            # must not reach home-assistant.log, which ships in every backup.
+            _LOGGER.debug(
+                "BMW MQTT message on %s: %s descriptor(s)",
+                msg.topic,
+                len(data) if isinstance(data, dict) else "?",
+            )
         if self._message_callback:
             asyncio.run_coroutine_threadsafe(self._message_callback(data), self.hass.loop)
 

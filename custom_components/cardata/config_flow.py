@@ -60,11 +60,10 @@ class CardataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         client_id = user_input["client_id"].strip()
 
-        for entry in list(self._async_current_entries()):
-            existing_client_id = entry.data.get("client_id") if hasattr(entry, "data") else None
-            if entry.unique_id == client_id or existing_client_id == client_id:
-                await self.hass.config_entries.async_remove(entry.entry_id)
-
+        # Any pre-existing entry for this client_id is replaced only once the new
+        # authorization has actually succeeded - see async_step_tokens. Removing
+        # it here destroyed a working entry (and its history) whenever the BMW
+        # device-code step then failed.
         await self.async_set_unique_id(client_id)
 
         self._client_id = client_id
@@ -176,6 +175,11 @@ class CardataConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             notification_id = f"{DOMAIN}_reauth_{self._reauth_entry.entry_id}"
             persistent_notification.async_dismiss(self.hass, notification_id)
             return self.async_abort(reason="reauth_successful")
+
+        for entry in list(self._async_current_entries()):
+            existing_client_id = entry.data.get("client_id") if hasattr(entry, "data") else None
+            if entry.unique_id == self._client_id or existing_client_id == self._client_id:
+                await self.hass.config_entries.async_remove(entry.entry_id)
 
         friendly_title = f"BimmerData Streamline ({self._client_id[:8]})"
         return self.async_create_entry(title=friendly_title, data=entry_data)
